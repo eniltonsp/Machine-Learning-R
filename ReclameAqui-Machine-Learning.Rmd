@@ -1,0 +1,310 @@
+---
+title: "ReclameAqui Machine Learning"
+author: "Enilton"
+date: "02/08/2021"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+## R Objetivo
+
+#Determinar se o cliente voltaria a fazer negocio usando as variaveis 
+#"Status","Data Reclamacao","Localizacao","Data Resposta Empresa","Data Feedback","Voltaria a fazer negocio","Nota Cliente"
+
+
+### libraries e install packages usado no modelo
+
+```{r packages}
+#install.packages('modeldata')
+#install.packages('tidyverse')
+#install.packages('tidymodels')
+#install.packages('funModeling')
+#install.packages('janitor')
+#install.packages('vip')
+#install.packages("corrplot")
+#install.packages('xgboost')
+
+
+library(modeldata)
+library(tidyverse)
+library(tidymodels)
+library(funModeling)
+library(vip)
+library(janitor)
+
+```
+
+
+
+```{r global-options}
+options(max.print = 150)
+```
+
+
+
+
+
+```{r data explorer}
+
+#Adicionando estado e subsituindo a variavel Localizacao que contem o municipio
+
+reclameaqui_data <- read_csv("~/Fiap bigdata/Zeeng/fase 5/Trabalho Final/Files/Reclame Aqui_R - all.csv")
+
+Estado_tbl <- read.table("~/Fiap bigdata/Zeeng/fase 5/Trabalho Final/Files/Estados.csv", 
+                         "\t", sep=",", header=TRUE)
+
+Cidade_tbl <- read.table("~/Fiap bigdata/Zeeng/fase 5/Trabalho Final/Files/Cidades.csv", 
+                         "\t", sep=",", header=TRUE)
+
+###########  Join Cidade_Estado & Estado_tbl
+Cidade_Estado <- Estado_tbl %>%
+  left_join(Cidade_tbl, by = "Estado", suffix = c(".e", ".c"), na_matches = "never") 
+
+
+########### Join Cidade_Estado to info_reclamacoes_avaliadas
+reclameaqui_data <- reclameaqui_data %>%
+  left_join(Cidade_Estado, by = c(Localizacao = "Municipio"), suffix = c(".reclameaqui_data", ".Cidade_Estado"), na_matches = "never") %>%
+  select(Segmento, Status, Estado,"Qtd dias resposta","Qtd dias conclusao","Voltaria a fazer negocio", "Nota Cliente")
+
+
+
+
+
+#Exploracao dos dados  
+
+data_ra <- reclameaqui_data %>% clean_names()
+
+data_ra %>% status
+
+data_ra %>% plot_num()
+
+data_ra %>% select_if(is.factor) %>% names()
+
+data_ra %>% tabyl(segmento) %>% adorn_pct_formatting() %>% arrange(desc(n))
+data_ra %>% tabyl(status) %>% adorn_pct_formatting() %>% arrange(desc(n))
+data_ra %>% tabyl(estado) %>% adorn_pct_formatting() %>% arrange(desc(n))
+data_ra %>% tabyl(qtd_dias_resposta) %>% adorn_pct_formatting() %>% arrange(desc(n))
+data_ra %>% tabyl(voltaria_a_fazer_negocio) %>% adorn_pct_formatting() %>% arrange(desc(n))
+data_ra %>% tabyl(nota_cliente) %>% adorn_pct_formatting() %>% arrange
+data_ra %>% tabyl(qtd_dias_conclusao) %>% adorn_pct_formatting() %>% arrange
+
+data_ra  %>%
+  na.omit() %>%
+  select_if(is.numeric) %>%
+  cor() %>%
+  corrplot::corrplot(addCoef.col = TRUE)
+
+```
+
+
+
+
+```{r split_data}
+
+#Split data 
+
+split_ra <- initial_split(data_ra, prop = 0.7, strata = voltaria_a_fazer_negocio)
+
+train_ra <- training(split_ra)
+test_ra <- testing(split_ra)
+
+cv_ra <- vfold_cv(train_ra, v = 5, strata = voltaria_a_fazer_negocio)
+
+```
+
+
+
+```{r pre-processing }
+
+#Pre-processing
+
+rec_ra <-
+recipe(voltaria_a_fazer_negocio~., data = train_ra) %>%
+  step_novel(all_nominal(), -voltaria_a_fazer_negocio) %>%
+  step_impute_median(all_numeric()) %>%
+  step_corr(all_numeric(), -all_outcomes(), threshold = 0.6) %>%
+  step_other(all_nominal(), -voltaria_a_fazer_negocio, other = "outros") %>%
+  step_dummy(all_nominal(), -voltaria_a_fazer_negocio)
+
+new_data <-prep(rec_ra, training = train_ra)
+
+new_data
+
+```
+
+
+
+
+```{r model }
+
+#Especificar modelo --> Classification model
+
+#Regression trees are used when the dependent variable is continuous while classification trees are used when #the dependent variable is categorical. In continuous, a value obtained is a mean response of observation. In #classification, a value obtained by a terminal node is a mode of observations.
+
+
+mdl_xgb_ra <-
+  boost_tree() %>%
+  set_mode("classification") %>%
+  set_engine("xgboost") %>%
+  set_args(trees = 800,
+           tree_depth = tune(),
+           min_n = tune(),
+           loss_reduction = tune(),
+           sample_size = tune(),
+           mtry = tune(),
+           learn_rate = tune())
+
+```
+
+```{r grid }
+
+#Definir grid para ver qual o melhor grade de configuracao
+
+grid_xgb_ra <-
+  grid_latin_hypercube(
+    tree_depth(),
+    min_n(),
+    loss_reduction(),
+    sample_size = sample_prop(),
+    finalize(mtry(), train_ra),
+    learn_rate(),
+    size = 20 )
+
+
+grid_xgb_ra
+
+```
+
+
+
+```{r workflow}
+
+# Definir fluxo de trabalho, especificar o Modelo e o pre-processamento 
+
+wf_xgb_ra <-
+  workflow() %>%
+  add_model(mdl_xgb_ra) %>%
+  add_recipe(rec_ra)
+
+wf_xgb_ra
+
+```
+
+
+
+```{r tune}
+#apos definido modelo, dados de pre-processamento e grade de parametros, fase do Tune para achar o melhor metrica
+
+tune_xgb_ra <-
+  
+  tune_grid(wf_xgb_ra,
+            resamples = cv_ra,
+            grid = grid_xgb_ra,
+            metrics = metric_set(roc_auc),
+            control = control_grid(save_pred = TRUE))
+
+tune_xgb_ra            
+            
+```
+
+
+```{r collect-metrics}
+#Coletar a metricas dos Tune
+
+tune_xgb_ra %>% collect_metrics()
+
+```
+
+
+```{r select-best-grid}
+#selecionar a melhor grade
+
+best_grid_xgb_ra <-
+  select_best(tune_xgb_ra, metric = "roc_auc")
+
+best_grid_xgb_ra
+
+
+```
+
+
+
+```{r select-best-workflow}
+#Selecionar a melhor workflow
+
+best_wf_xgb_ra <-
+  finalize_workflow(wf_xgb_ra, best_grid_xgb_ra)
+
+best_wf_xgb_ra
+
+```
+
+```{r final-workflow}
+#Rodar o modelo
+
+final_wf_xgb_ra <-
+  last_fit(best_wf_xgb_ra, split = split_ra)
+
+final_wf_xgb_ra %>% collect_metrics()
+
+final_wf_xgb_ra %>% unnest(.metrics)
+
+final_wf_xgb_ra %>% 
+	unnest(.predictions) %>%
+	conf_mat(truth = voltaria_a_fazer_negocio, estimate = .pred_class)
+
+
+final_mdl_xgb_ra <-
+	fit(best_wf_xgb_ra, data = data_ra)
+
+
+final_wf_xgb_ra %>%
+  collect_predictions() %>%
+  roc_curve(voltaria_a_fazer_negocio, .pred_Não) %>%
+  autoplot()
+
+
+#Salvar o modelo
+saveRDS(final_mdl_xgb_ra, "C:/Users/enilt/Documents/Fiap bigdata/Zeeng/fase 5/Trabalho Final/R/ReclameAqui_model.rds")
+
+```
+
+```{r variable-importance}
+
+#Ver as variaveis mais importantes
+
+best_wf_xgb_ra %>%
+  fit(data = train_ra) %>%
+  extract_fit_parsnip() %>%
+  vip(geom = "point")
+
+```
+```{r Simulando percentual de probabilidade}
+
+  predict(final_mdl_xgb_ra, 
+            new_data = tibble(
+                "segmento" = "Varejo",
+                "status" = "Resolvido",
+                "estado" = "São Paulo",
+                "qtd_dias_resposta" = 8,
+                "qtd_dias_conclusao" = 10,
+                "nota_cliente" = 4
+             ),
+  type = "prob"
+      ) %>%
+  pivot_longer(cols = everything()) %>%
+  arrange(desc(value)) %>%
+  dplyr::slice(1) %>%
+  select(value)
+
+
+```
+
+
+
+

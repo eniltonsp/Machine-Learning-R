@@ -1,0 +1,322 @@
+---
+title: "Fiap ReclameAqui Machine Learning Por Empresa"
+author: "Enilton Machado"
+date: "02/08/2021"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+## R Objetivo
+
+#Determinar se o cliente voltaria a fazer negocio usando as variaveis 
+#"Status","Data Reclamacao","Localizacao","Data Resposta Empresa","Data Feedback","Voltaria a fazer negocio","Nota Cliente"
+
+
+### libraries e install packages usado no modelo
+
+```{r packages}
+#install.packages('modeldata')
+#install.packages('tidyverse')
+#install.packages('tidymodels')
+#install.packages('funModeling')
+#install.packages('janitor')
+#install.packages('vip')
+#install.packages("corrplot")
+#install.packages('xgboost')
+
+
+library(modeldata)
+library(tidyverse)
+library(tidymodels)
+library(funModeling)
+library(vip)
+library(janitor)
+
+```
+
+
+
+```{r global-options}
+options(max.print = 150)
+```
+
+
+
+
+
+```{r data explorer}
+
+#Adicionando estado e subsituindo a variavel Localizacao que contem o municipio
+
+reclameaqui_data_emp <- read_csv("~/Fiap bigdata/Zeeng/fase 5/Trabalho Final/Files/Reclame Aqui_R - all.csv")
+
+Estado_tbl <- read.table("~/Fiap bigdata/Zeeng/fase 5/Trabalho Final/Files/Estados.csv", 
+                         "\t", sep=",", header=TRUE)
+
+Cidade_tbl <- read.table("~/Fiap bigdata/Zeeng/fase 5/Trabalho Final/Files/Cidades.csv", 
+                         "\t", sep=",", header=TRUE)
+
+###########  Join Cidade_Estado & Estado_tbl
+Cidade_Estado <- Estado_tbl %>%
+  left_join(Cidade_tbl, by = "Estado", suffix = c(".e", ".c"), na_matches = "never") 
+
+
+########### Join Cidade_Estado to info_reclamacoes_avaliadas
+reclameaqui_data_emp <- reclameaqui_data_emp %>%
+  left_join(Cidade_Estado, by = c(Localizacao = "Municipio"), suffix = c(".reclameaqui_data_emp", ".Cidade_Estado"), na_matches = "never") %>%
+  select(Empresa, Segmento, Status, Estado,"Qtd dias resposta","Qtd dias conclusao", "Voltaria a fazer negocio", "Nota Cliente")
+
+
+
+
+
+#Exploracao dos dados  
+
+data_ra_emp <- reclameaqui_data_emp %>% clean_names()
+
+data_ra_emp %>% status
+
+data_ra_emp %>% plot_num()
+
+data_ra_emp %>% select_if(is.factor) %>% names()
+
+data_ra_emp %>% tabyl(empresa) %>% adorn_pct_formatting() %>% arrange
+data_ra_emp %>% tabyl(segmento) %>% adorn_pct_formatting() %>% arrange(desc(n))
+data_ra_emp %>% tabyl(status) %>% adorn_pct_formatting() %>% arrange(desc(n))
+data_ra_emp %>% tabyl(estado) %>% adorn_pct_formatting() %>% arrange(desc(n))
+data_ra_emp %>% tabyl(qtd_dias_resposta) %>% adorn_pct_formatting() %>% arrange(desc(n))
+data_ra_emp %>% tabyl(voltaria_a_fazer_negocio) %>% adorn_pct_formatting() %>% arrange(desc(n))
+data_ra_emp %>% tabyl(nota_cliente) %>% adorn_pct_formatting() %>% arrange
+data_ra_emp %>% tabyl(qtd_dias_conclusao) %>% adorn_pct_formatting() %>% arrange
+
+
+data_ra_emp  %>%
+  na.omit() %>%
+  select_if(is.numeric) %>%
+  cor() %>%
+  corrplot::corrplot(addCoef.col = TRUE)
+
+```
+
+
+
+
+```{r split_data}
+
+#Split data 
+
+split_ra_emp <- initial_split(data_ra_emp, prop = 0.7, strata = voltaria_a_fazer_negocio)
+
+train_ra_emp <- training(split_ra_emp)
+test_ra_emp <- testing(split_ra_emp)
+
+cv_ra_emp <- vfold_cv(train_ra_emp, v = 5, strata = voltaria_a_fazer_negocio)
+
+```
+
+
+
+```{r pre-processing }
+
+#Pre-processing
+
+rec_ra_emp <-
+recipe(voltaria_a_fazer_negocio~., data = train_ra_emp) %>%
+  step_novel(all_nominal(), -voltaria_a_fazer_negocio) %>%
+  step_impute_median(all_numeric()) %>%
+  step_corr(all_numeric(), -all_outcomes(), threshold = 0.6) %>%
+  step_other(all_nominal(), -voltaria_a_fazer_negocio, other = "outros") %>%
+  step_dummy(all_nominal(), -voltaria_a_fazer_negocio)
+
+new_data_emp <-prep(rec_ra_emp, training = train_ra_emp)
+
+new_data_emp
+
+```
+
+
+
+
+```{r model }
+
+#Especificar modelo --> Classification model
+
+#Regression trees are used when the dependent variable is continuous while classification trees are used when #the dependent variable is categorical. In continuous, a value obtained is a mean response of observation. In #classification, a value obtained by a terminal node is a mode of observations.
+
+
+mdl_xgb_ra_emp <-
+  boost_tree() %>%
+  set_mode("classification") %>%
+  set_engine("xgboost") %>%
+  set_args(trees = 800,
+           tree_depth = tune(),
+           min_n = tune(),
+           loss_reduction = tune(),
+           sample_size = tune(),
+           mtry = tune(),
+           learn_rate = tune())
+
+```
+
+```{r grid }
+
+#Definir grid para ver qual o melhor grade de configuracao
+
+grid_xgb_ra_emp <-
+  grid_latin_hypercube(
+    tree_depth(),
+    min_n(),
+    loss_reduction(),
+    sample_size = sample_prop(),
+    finalize(mtry(), train_ra_emp),
+    learn_rate(),
+    size = 20 )
+
+
+grid_xgb_ra_emp
+
+```
+
+
+
+```{r workflow}
+
+# Definir fluxo de trabalho, especificar o Modelo e o pre-processamento 
+
+wf_xgb_ra_emp <-
+  workflow() %>%
+  add_model(mdl_xgb_ra_emp) %>%
+  add_recipe(rec_ra_emp)
+
+wf_xgb_ra_emp
+
+```
+
+
+
+```{r tune}
+#apos definido modelo, dados de pre-processamento e grade de parametros, fase do Tune para achar o melhor metrica
+
+tune_xgb_ra_emp <-
+  
+  tune_grid(wf_xgb_ra_emp,
+            resamples = cv_ra_emp,
+            grid = grid_xgb_ra_emp,
+            metrics = metric_set(roc_auc),
+            control = control_grid(save_pred = TRUE))
+
+tune_xgb_ra_emp            
+            
+```
+
+
+```{r collect-metrics}
+#Coletar a metricas dos Tune
+
+tune_xgb_ra_emp %>% collect_metrics()
+
+```
+
+
+```{r select-best-grid}
+#selecionar a melhor grade
+
+best_grid_xgb_ra_emp <-
+  select_best(tune_xgb_ra_emp, metric = "roc_auc")
+
+best_grid_xgb_ra_emp
+
+
+```
+
+
+
+```{r select-best-workflow}
+#Selecionar a melhor workflow
+
+best_wf_xgb_ra_emp <-
+  finalize_workflow(wf_xgb_ra_emp, best_grid_xgb_ra_emp)
+
+best_wf_xgb_ra_emp
+
+```
+
+```{r final-workflow}
+#Rodar o modelo
+
+final_wf_xgb_ra_emp <-
+  last_fit(best_wf_xgb_ra_emp, split = split_ra_emp)
+
+final_wf_xgb_ra_emp %>% collect_metrics()
+
+final_wf_xgb_ra_emp %>% unnest(.metrics)
+
+final_wf_xgb_ra_emp %>% 
+	unnest(.predictions) %>%
+	conf_mat(truth = voltaria_a_fazer_negocio, estimate = .pred_class)
+
+
+final_mdl_xgb_ra_emp <-
+	fit(best_wf_xgb_ra_emp, data = data_ra_emp)
+
+
+final_wf_xgb_ra_emp %>%
+  collect_predictions() %>%
+  roc_curve(voltaria_a_fazer_negocio, .pred_Não) %>%
+  autoplot()
+
+
+#Adicionar valores para simular o modelo
+new_score_emp <- tribble(~empresa, ~segmento,~status, ~estado, ~qtd_dias_resposta, ~qtd_dias_conclusao, ~nota_cliente,
+                    "Banco Itaú", "Financeira","Resolvido","São Paulo", 1, 1,2)
+
+
+#Resultado simulacao da predicao da variavel
+predict(final_mdl_xgb_ra_emp, new_data = new_score_emp)
+
+
+#Salvar o modelo
+saveRDS(final_mdl_xgb_ra_emp, "C:/Users/enilt/Documents/Fiap bigdata/Zeeng/fase 5/Trabalho Final/R/ReclameAqui_model_empresa.rds")
+
+```
+
+```{r variable-importance}
+
+#Ver as variaveis mais importantes
+
+best_wf_xgb_ra_emp %>%
+  fit(data = train_ra_emp) %>%
+  extract_fit_parsnip() %>%
+  vip(geom = "point")
+
+```
+```{r Simulando percentual de probabilidade}
+
+  predict(final_mdl_xgb_ra_emp, 
+            new_data = tibble(
+                "empresa" = "Banco Itaú",
+                "segmento" = "Financeira",
+                "status" = "Resolvido",
+                "estado" = "São Paulo",
+                "qtd_dias_resposta" = 15,
+                "qtd_dias_conclusao" = 20,
+                "nota_cliente" = 4
+             ),
+  type = "prob"
+      ) %>%
+  pivot_longer(cols = everything()) %>%
+  arrange(desc(value)) %>%
+  dplyr::slice(1) %>%
+  select(value)
+
+
+```
+
+
+
+
