@@ -1,0 +1,17 @@
+.Rhistory
+.RData
+.Ruserdata
+.Renviron
+.env
+.env.*
+!.env.example
+.Rproj.user/
+renv/library/
+renv/staging/
+data/raw/*
+!data/raw/README.md
+models/*
+!models/README.md
+reports/
+rsconnect/
+*.log
