@@ -1,0 +1,23 @@
+name: R checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: '4.4.3'
+          use-public-rspm: true
+      - name: Install application dependencies
+        run: Rscript scripts/install.R
+      - name: Parse active source and run contract tests
+        run: |
+          Rscript -e 'for (f in c("app.R", list.files("R", full.names=TRUE), list.files("scripts", pattern="[.]R$", full.names=TRUE))) parse(f)'
+          Rscript -e 'testthat::test_dir("tests/testthat", stop_on_failure=TRUE)'
+      - name: Check Shiny startup
+        run: Rscript -e 'app <- source("app.R")$value; stopifnot(inherits(app, "shiny.appobj"))'

@@ -1,0 +1,53 @@
+{
+  "Reclame Aqui - lista.csv": {
+    "rows": 11699,
+    "columns": [
+      "Data",
+      "Empresa",
+      "IdEmpresa",
+      "Localidade",
+      "Reclamacao",
+      "Status",
+      "Titulo"
+    ],
+    "sha256": "73e18f1cf82f0102fc02c797688407ff1ff6a7cc059315764833a4d20df9c324",
+    "companies": 14
+  },
+  "info_reclamacoes_avaliadas.txt": {
+    "rows": 8574,
+    "columns": [
+      "Data",
+      "Empresa",
+      "IdEmpresa",
+      "Localidade",
+      "Reclamacao",
+      "Status",
+      "Titulo",
+      "Data_Extracao",
+      "Qtd_Dias"
+    ],
+    "sha256": "da5b7a87f27d45da3d85ce4877765c30cb4c137c712a71cf805aa2326addb313",
+    "companies": 9
+  },
+  "Zeeng Reclame Aqui.csv": {
+    "rows": 18,
+    "columns": [
+      "Avaliadas",
+      "Empresa",
+      "IdEmpresa",
+      "Indice_solucao",
+      "Nao_respondidas",
+      "Nota",
+      "Nota_consumidor",
+      "Percent_resp",
+      "Percent_voltariam",
+      "Qnt_reclamacoes",
+      "Qnt_reclamacoes_resp",
+      "NomeEmpresa",
+      "DataCadastro",
+      "Setor"
+    ],
+    "sha256": "0f85b8dbde309213e2539be4ebc8cda2436cbe31335f3b655e75f1d1f1aa0da8",
+    "companies": 18
+  }
+}
